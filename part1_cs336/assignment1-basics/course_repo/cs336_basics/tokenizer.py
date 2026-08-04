@@ -52,7 +52,7 @@ class Tokenizer:
         PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
         PAT = re.compile(PAT)  # precompilng helps
         position = 0
-        for text_part in text_parts:
+        for text_part in text_parts:  # this is sequential, we could probably parallelize this
             if self.special_tokens is not None and text_part in special_token_set:
                 if text_part not in special_token_positions:
                     special_token_positions[text_part] = []

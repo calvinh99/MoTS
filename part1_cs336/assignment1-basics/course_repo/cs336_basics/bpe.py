@@ -270,17 +270,17 @@ def dump_bpe(vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], output_
             f.write(bytes_to_str(merge[0]) + ' ' + bytes_to_str(merge[1]) + "\n")
 
 
-def load_bpe(output_dir: str) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+def load_bpe(vocab_filepath: str, merges_filepath: str) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     """We need to reverse the bytes_to_unicode mapping to get the bytes back from the unicode strings"""
     vocab, merges = {}, []
     b2u = bytes_to_unicode()
     u2b = {v: k for k, v in b2u.items()}
     def str_to_bytes(s: str) -> bytes:
         return bytes([u2b[c] for c in s])
-    with open(os.path.join(output_dir, "vocab.json"), "r") as f:
+    with open(vocab_filepath, "r") as f:
         vocab = json.load(f)  # str: int
-        vocab = {str_to_bytes(k): v for k, v in vocab.items()}
-    with open(os.path.join(output_dir, "merges.txt"), "r") as f:
+        vocab = {v: str_to_bytes(k) for k, v in vocab.items()}  # int: bytes (matches Tokenizer.__init__)
+    with open(merges_filepath, "r") as f:
         for line in f:
             merge = line.rstrip().split(" ")
             merges.append((str_to_bytes(merge[0]), str_to_bytes(merge[1])))

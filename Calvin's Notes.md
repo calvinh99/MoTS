@@ -1,31 +1,12 @@
-I'm going to just read the official cs336 lecture links ie [lecture_01.py](https://cs336.stanford.edu/lectures/?trace=lecture_01) cuz they are much prettier. But maybe the `lectures/` folder will be useful to give AI agents context. Though I'm not sure if I will ask Cursor/Codex/Claude-Code inside this folder (pro: can access lecture materials for context) or just ask via ChatGPT/Claude website (pro: better UIUX & tracking of chat history).
+# Assignment 1
+Assignment 1 covers the end to end of an LLM.
 
-# Lecture 1
-https://cs336.stanford.edu/lectures/?trace=lecture_01
+## BPE
+We are implementing a byte-level BPE tokenizer, not a char-level BPE tokenizer.
 
-will learn mechanics of LLMs (hard knowledge, ie attention mechanism) & mindset (serious focus on scaling). intuitions are hard (seems need frontier lab experience).
+### Encoding Chars
 
-Seems to have a lot of high level intutiions & introduces a lot of papers. But not sure if I should spend more time on this for just jump into assignment 1 directly.
-
-# Stream-Of-Consciousness Worklog
-
-I'll put what I do & random thoughts & notes here & organize later.
-
-Going through [[cs336_assignment1_basics.pdf]].
-
-Downloading **datasets**, a few gigs, should be ok for now, can delete later to make space on my macbook pro.
-
-Using cursor composer 2.5 fast w/ the provided AGENTS.md to help make life easier but not do my work for me. I even ran the download cmds myself lol.
-
-> not related but im curious abt the stanford course code to generate the materials & pdfs, seems it can integrate math, code, and more into one neat render.
-
-**problem 1 is stupid**. since I'm not an actual student in this class, I'll be more picky about the problems I choose to spend time on and learn.
-
-## Encoding Chars
-
-`>>` means AI-written.
-
->> UTF-8 encodes text as bytes where the first byte tells you the group size — 'h' is one byte [104], while '牛' is three bytes [231, 137, 155] because 231 (11100011) means “2 more continuation bytes follow.” There are no separator bytes: 231 never stands alone as a character, and bytes like 137 (10000001) only make sense as followers, so the decoder reads 231,137,155 → 牛, then '!' → [33], and keeps going.
+> UTF-8 encodes text as bytes where the first byte tells you the group size — 'h' is one byte [104], while '牛' is three bytes [231, 137, 155] because 231 (11100011) means “2 more continuation bytes follow.” There are no separator bytes: 231 never stands alone as a character, and bytes like 137 (10000001) only make sense as followers, so the decoder reads 231,137,155 → 牛, then '!' → [33], and keeps going.
 
 I love this explanation. Basically all chars are encoded as bytes, but obv there's not only 256 chars only, so chars are encoded/decoded as multiple bytes. w/o separator bytes, we use the first byte to tell us how many more bytes to read. This also means **only 128 chars are 1 byte** (the ones starting with 0xxxxxxx 0-127).
 
@@ -33,9 +14,7 @@ ASCII are the 128 chars that are single byte. utf-8 is a way to encode **Unicode
 
 bytes aren't good for tokenization though cuz long sequence lengths. 10 words may be 50 bytes.
 
-## BPE Tokenizer
-We are implementing a byte-level BPE tokenizer, not a char-level BPE tokenizer.
-
+### Train BPE
 **pre-tokenization** allows for big speedup. Here's a great [PR](https://github.com/openai/tiktoken/pull/234/files) to the openai tiktoken codebase introducing a better pretokenization regex.
 
 We can parallelize pre-tokenization based on cpu core count. We need parallel processes not just parallel threads because we want to run CPU-intensive work in parallel on **multiple cores**. Due to python **GIL**, multithreading doesn't actually allow for parallel execution of python code on multiple cores for CPU-bound work because a thread must **acquire the GIL** before running.
@@ -58,7 +37,7 @@ I initially tried to do a live update iteration (not sure what the best word for
 1. turn the old pretoken into the new pretoken, ie old = `B, C, B, C` and new = `BC, BC`
 2. for each pair in old, dec, and for each pair in new, inc
 
->> After AI review, another optimization I can make is add a max heap so that finding most freq pair is O(1) lookup time & popping it to get next max freq pair is O($log_2(pairs)$). We still need our freq map though to inc/dec in O(1). But then the question of - how do we deal with stale pairs in the heap? It's simple, when we pop from heap we double check the freq from the heap w/ the freq in the map, if not equal we discard and pop again. Our pair freq map is the source of truth.
+> After AI review, another optimization I can make is add a max heap so that finding most freq pair is O(1) lookup time & popping it to get next max freq pair is O($log_2(pairs)$). We still need our freq map though to inc/dec in O(1). But then the question of - how do we deal with stale pairs in the heap? It's simple, when we pop from heap we double check the freq from the heap w/ the freq in the map, if not equal we discard and pop again. Our pair freq map is the source of truth.
 
 WOW! After implementing lazy max heap, `test_train_bpe.py` time dropped from 1s to 0.6s! This is big. Also, a detail is to track net pair freq deltas across all pretokens (once per merge) then apply at the end & push onto heap only on change, this **prevents excess stale pairs** in heap.
 
@@ -71,10 +50,10 @@ So:
 - **pair to pretokens** lookup for updating after merge
 - **incrementally update pair freqs** for only affected pairs
 
-**Serializing vocab and merges to disk**
+#### Serializing vocab and merges to disk
 Lowkey this trumped me for a bit. How do we save bytes to disk in a way that is **human-readable** but also **revertible** back into bytes. Had to consult w/ Claude who recommended GPT2's bytes_to_unicode method. Basically map each singular byte to a readable char. This is mostly hardcoded from knowledge of the **unicode directory** (140k+ chars). From the first 256 bytes there's 188 "good" readable chars and 68 "bad" chars that need to get remapped. The good are composed from 3 code point ranges (code point is the number assigned to a unicode char): 33 to 126, 161 to 172, 174 to 255. For all bad chars we simply increment their code point by 256 (maps to extended Latin like "Ġ"). So for vocab, we run bytes_to_unicode mapping on each byte and same for merges. Also turn off **ascii escaping** when dumping vocab json (so that we get the actual glyph like "Ā" instead of "\u0100").
 
-**Profiling train_bpe**
+#### Profiling train_bpe
 To answer `train_bpe_tinystories`, training took ~34s and it used ~174MB peak memory. The longest token is `b' accomplishment'` which makes sense. I assume this is true because the word or pretoken 'accomplishment' appears pretty frequently within the tinystories training corpus (within the top 10k most freq).
 
 For profiling I ran it on the tinystories validation corpus where I use a single process for pretokenization. I found that pretokenization takes **~82%** of the total time spent (makes sense, merge loop is pretty fast due to pretokenization and all the other optimizations we do). The bulk of this time is purely **iterating through the corpus & incrementing the pretoken counter**, not the regex (precompile the regex pattern & use finditer to prevent loading all in mem).
@@ -84,9 +63,59 @@ Nvm, the prev peak memory is **wrong**. I did some napkin math, at 8 processes a
 I made the profiling code messy (distinct profiling logic setting num_processes to 1, separate bg thread for peak memory usage). But whatever, we can fix that later.
 
 
-**Tokenizer**
-This actually encodes text into tokens and decodes tokens into text given vocab & merges. In the assignment it recommends adding an optional `special_tokens` param but idk why (isn't special tokens in the vocab alr?).
+### Tokenizer
+encode takes str text and outputs list of int token ids. decode takes a list of int token ids and outputs str text.
 
-took me ~1.5 hrs to finished the tokenizer problem suboptimally.
+encode requires **simulating train bpe** on the given text. To do this we use regex to split text into a list of special tokens and pretokens (so we don't merge across pretoken boundaries). Then for each pretoken we go through **all merges from first to last** and at each iteration we check if the merge pair is present in the pretoken. Finally, we go through the vocab and convert each element in the list into its int id. That's the **naive** implementation, next let's optimize.
 
-after a walk & another 30 mins I optimized it (tests finished in ~1s vs ~10s) by changing the merge logic to using a lookup from merge pair -> rank. This way we iterate over only the pairs in the pretoken rather than iterating over all merges (equivalent to vocab size).
+Given $n$ is length of pretoken list, $m$ is number of merges, and $p$ is avg length of each pretoken, then the time complexity of above is $O(n \times m \times p)$. There are 2 optimizations I applied. First, I go through the pretoken list and map each pretoken to a list of its positions. This way we only need to apply the bpe merges once to each **unique pretoken**, let's call the number of unique pretokens $u$ and $u << n$. Second, rather than iterating through all $m$ merges we can construct a map from merge pair to its merge order or rank. Then for each pretoken we check all its $p$ pairs and merge the **lowest rank pair** that exists until there's no more mergeable pairs left. Given $m$ is roughly the size of vocab, ie 10k, and the actual number of merges per pretoken is bounded by a max of $p$, which is << 10k, this is a big optimization. Our time complexity is now $O(n \times p + u \times p^2)$. 
+
+
+## Transformer Architecture
+After tokenizer, we're getting into the actual transformer model architecture.
+
+#### Einsum
+An einsum is basically fixing the dimensions in the output and doing product sum over the missing dimensions in the input. ie `bij,bjk -> bik` is basically:
+$$
+\text{out}_{\text{(b, i, k)}} = \sum_j \text{A}_{\text{(b, i, j)}} \times \text{B}_{\text{(b, j, k)}}
+$$
+we do a product-sum over the **contracted** dimension (contracted – the dim does not appear in the output).
+
+#### Row major
+When a matrix is row major, it means incrementing memory address changes last index first. ie for a 2D matrix `A[i, j]` it means j increments first. If it's column major then i increments first (stored in memory the order would be different). ie
+$$
+A = \begin{bmatrix}
+1 & 2 \\
+3 & 4
+\end{bmatrix}
+$$
+row-major A is stored as `[1, 2, 3, 4]` but column-major A is stored as `[1, 3, 2, 4]` (i increments first as we move along memory).
+
+#### Linear Module
+Use `load_state_dict` to load the provided weights into W instead of simple `linear.W = weights` because this preserves self.W's status as a `nn.Parameter`. Use einsum for forward ops `einsum(x, self.W, "... d_in, d_out d_in -> ... d_out)`.
+
+#### Embedding Module
+It's a lookup mechanism, we have $E$ of shape $\text{vocab} \times d_{\text{model}}$ and we just do $E[x]$ where $x$ is a sequence of vocab ids. Then how do we backprop and edit $E$? Well we can treat indexing as $x$ is of shape $\text{seq} \times \text{vocab}$ where it's a one-hot vector of size $\text{vocab}$.
+
+Then there's some complex math that I need to revisit in the future, we need to compute Jacobian matrix of partial derivatives.
+
+Some stuff I used to know: a gradient is a vector derivative. And there's dy/dx where y is scalar and x is vector or y and x are both vector. And there's associated equations. I need to Anki/Fermi all of this bruh. [good pdf on matrix derivatives](https://cs231n.stanford.edu/handouts/derivatives.pdf)
+
+#### RMSNorm
+$$
+y = g \sqrt{\frac{1}{d_{\text{model}}} \sum_m^{d_{\text{model}}} x_m^2}
+$$
+This is layer-norm (across $d_\text{model}$ dimension). We do this twice per transformer block and once before FFN.
+
+#### SwiGLU
+The "divine benevolence" method.
+$$
+\text{SwiGLU}(x, W_1, W_2, W_3) = W_2 (SiLU(W_1x) \odot W_3 x)
+$$
+Final output is $d_\text{model}$ and $W_1, W_3 \in d_\text{ff} \times d_\text{model}$  and $W_2 \in d_\text{model} \times d_\text{ff}$.
+
+$d_\text{ff}$ is $\frac{8}{3} d_\text{model}$ rounded to nearest multiple of 64 for hardware reasons.
+
+
+
+
