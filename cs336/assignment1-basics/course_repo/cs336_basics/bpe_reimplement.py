@@ -1,6 +1,6 @@
 """nanoBPE. Each version is a copy of the last with a small edit.
 
-  v0→v1  GPT-2 pretok (merge loop unchanged)
+  v0→v1  GPT-2 pretok dict (stop scanning every byte of the corpus)
   v1→v2  inverted index + incremental pair counts
   v2→v3  lazy heap: heapify, pop, one heappush
   v3→v4  Pool pretok (merge loop unchanged)
@@ -114,14 +114,15 @@ def train_bpe_v0(
     vocab_size: int,
     special_tokens: list[str],
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
-    pretok_start = time.perf_counter()
+    load_start = time.perf_counter()
     text = open(input_path, encoding="utf-8", errors="ignore").read()
+    # split on specials so we don't merge across documents — not GPT-2 pretok
     special_pat = "|".join(re.escape(tok) for tok in special_tokens)
-    pretoken_freq = Counter()
+    corpus = []
     for part in re.split(special_pat, text):
         if part:
-            pretoken_freq[tuple(bytes([b]) for b in part.encode())] += 1
-    pretok_seconds = time.perf_counter() - pretok_start
+            corpus.append([bytes([b]) for b in part.encode()])
+    load_seconds = time.perf_counter() - load_start
 
     vocab = {i: bytes([i]) for i in range(256)}
     for special_token in special_tokens:
@@ -130,17 +131,14 @@ def train_bpe_v0(
     merge_start = time.perf_counter()
     while len(vocab) < vocab_size:
         pair_freq = defaultdict(int)
-        for pretoken, count in pretoken_freq.items():
-            for i in range(len(pretoken) - 1):
-                pair_freq[pretoken[i], pretoken[i + 1]] += count
+        for tokens in corpus:
+            for i in range(len(tokens) - 1):
+                pair_freq[tokens[i], tokens[i + 1]] += 1
         max_pair = max(pair_freq, key=lambda pair: (pair_freq[pair], pair))
-        new_freq = Counter()
-        for pretoken, count in pretoken_freq.items():
-            new_freq[tuple(merge_pair(pretoken, max_pair))] += count
-        pretoken_freq = new_freq
+        corpus = [merge_pair(tokens, max_pair) for tokens in corpus]
         vocab[len(vocab)] = max_pair[0] + max_pair[1]
         merges.append(max_pair)
-    print(f"pretokenization: {pretok_seconds:.3f}s  merge: {time.perf_counter() - merge_start:.3f}s")
+    print(f"load corpus: {load_seconds:.3f}s  merge: {time.perf_counter() - merge_start:.3f}s")
     return vocab, merges
 
 
