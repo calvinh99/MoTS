@@ -9,3 +9,8 @@ A little about me. I'm Cal. I'm 23 & have some ML background. I've taken many ML
 ## Part 1 - CS 336
 
 I hate lectures with a passion. The lecturer does not have my priors (elaborate) & it's low bandwidth communication of information. So I will approach this course with an almost rushed pace - where I just tackle the homeworks & todos with a "can I do this?" approach. I will use AI excessively for learning - but not implementation. I will go on rabbitholes as deep as I need to in order to fill gaps in knowledge (from a porous math/cs background).
+
+
+## Part 2 - Inference Engineering
+
+I think inference engineering has always been something that I like. Goal's very clear: increase throughput of your token factory. It's very technical, a good inference engineer probably has deeper understanding of the LLM internals than a good AI researcher. So it becomes trivial to pivot into AI research.
