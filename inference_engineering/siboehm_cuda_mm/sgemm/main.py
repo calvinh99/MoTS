@@ -3,6 +3,8 @@ from pathlib import Path
 
 import modal
 
+SCRIPT_NAME = "sgemm"
+
 image = (
     modal.Image.from_registry(
         "nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.12"
@@ -10,11 +12,11 @@ image = (
 )
 
 # image will be the default docker container for funcs that run on this app
-app = modal.App("sgemm", image=image)
+app = modal.App(SCRIPT_NAME, image=image)
 
 @app.function(gpu="A10", timeout=60)
 def go(src: str):  # the function that runs on the A10, src is the kernel source code
-    Path("/tmp/sgemm.cu").write_text(src)  # dump the kernel
+    Path(f"/tmp/{SCRIPT_NAME}.cu").write_text(src)  # dump the kernel
     subprocess.run(
         [
             "nvcc",  # NVDA cuda compiler
@@ -22,14 +24,14 @@ def go(src: str):  # the function that runs on the A10, src is the kernel source
             "-arch=sm_86",  # A10 architecture
             "--ptxas-options=-v",  # verbose, print registers & SMEM usage
             "-lcublas",  # link cuBLAS so our code can load the cuBLAS sgemm kernel
-            "/tmp/sgemm.cu",  # what is getting compiled
+            f"/tmp/{SCRIPT_NAME}.cu",  # what is getting compiled
             "-o",
-            "/tmp/sgemm"  # the compiled binary
+            f"/tmp/{SCRIPT_NAME}"  # the compiled binary
         ],
         check=True  # if nvcc fails raise error
     )
-    subprocess.run(["/tmp/sgemm"], check=True)
+    subprocess.run([f"/tmp/{SCRIPT_NAME}"], check=True)
 
 @app.local_entrypoint()  # need this for modal cli
 def main():
-    go.remote((Path(__file__).parent / "sgemm.cu").read_text())  # find sgemm.cu in the same dir
+    go.remote((Path(__file__).parent / f"{SCRIPT_NAME}.cu").read_text())  # find sgemm.cu in the same dir

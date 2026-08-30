@@ -7,6 +7,7 @@
 #define CEIL_DIV(a, b) (((a) + (b) - 1) / (b))  // not a function, compiler replaces instance of CEIL_DIV with the defined expression
 constexpr int N = 4096;  // compiletime vs runtime var
 constexpr int REPS = 10;
+constexpr int BLOCKTILE = 32;
 
 void cudaCheck(cudaError_t e) {
   // this function allows us to avoid silent errors
@@ -69,6 +70,45 @@ void launch_gmem_coalesce(float *A, float *B, float *C) {
   dim3 grid(CEIL_DIV(N, 32), CEIL_DIV(N, 32));  // 128 x 128 = 16,384 blocks, each block 1024 threads
   dim3 block(32, 32);
   sgemm_gmem_coalesce<<<grid, block>>>(N, N, N, 1.f, A, B, 0.f, C);
+}
+
+__global__ void sgemm_smem(
+  int M, int N, int K, float alpha,
+  const float *A, const float *B,
+  float beta, float *C
+) {
+  const int bRow = blockIdx.x * BLOCKTILE;
+  const int bCol = blockIdx.y * BLOCKTILE;
+  const int lRow = threadIdx.y;
+  const int lCol = threadIdx.x;  // gmem coalesce so threads in a warp load diff cols of B
+  const int tRow = bRow + lRow;
+  const int tCol = bCol + lCol;
+
+  __shared__ float As[BLOCKTILE][BLOCKTILE];
+  __shared__ float Bs[BLOCKTILE][BLOCKTILE];
+
+  float tmp = 0.f;
+
+  for (int k = 0; k < K; k+=BLOCKTILE) {
+    As[lRow][lCol] = A[tRow * K + (k + lCol)];
+    Bs[lRow][lCol] = B[(k + lRow) * N + tCol];
+
+    __syncthreads();  // make sure we wait for all threads to finish loading data to smem
+
+    for (int i = 0; i < BLOCKTILE; i++) {
+      tmp += As[lRow][i] * Bs[i][lCol];
+    }
+
+    __syncthreads();  // make sure threads don't move onto next loop before all threads finish
+  }
+
+  C[tRow * N + tCol] = alpha * tmp + beta * C[tRow * N + tCol];
+}
+
+void launch_smem(float *A, float *B, float *C) {
+  dim3 grid(CEIL_DIV(N, BLOCKTILE), CEIL_DIV(N, BLOCKTILE));  // 128 x 128 = 16,384 blocks, each block 1024 threads
+  dim3 block(BLOCKTILE, BLOCKTILE);
+  sgemm_smem<<<grid, block>>>(N, N, N, 1.f, A, B, 0.f, C);
 }
 
 void launch_cublas(float *A, float *B, float *C) {
@@ -167,10 +207,18 @@ int main() {
   cudaCheck(cudaMemcpy(B, hB, bytes, cudaMemcpyHostToDevice));
 
   int rc = 0;
-  rc |= compare(launch_cublas, "cublas", launch_naive, "naive",
-                A, B, C, C_ref, hC, hCref, bytes);
-  rc |= compare(launch_cublas, "cublas", launch_gmem_coalesce, "gmem_coalesce",
-                A, B, C, C_ref, hC, hCref, bytes);
+  rc |= compare(
+    launch_cublas, "cublas", launch_naive, "naive",
+    A, B, C, C_ref, hC, hCref, bytes
+  );
+  rc |= compare(
+    launch_cublas, "cublas", launch_gmem_coalesce, "gmem_coalesce",
+    A, B, C, C_ref, hC, hCref, bytes
+  );
+  rc |= compare(
+    launch_cublas, "cublas", launch_smem, "smem",
+    A, B, C, C_ref, hC, hCref, bytes
+  );
 
   free(hA);
   free(hB);
