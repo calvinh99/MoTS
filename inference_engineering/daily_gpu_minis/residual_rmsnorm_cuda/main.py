@@ -46,10 +46,12 @@ def run():
         ctypes.c_int,
         ctypes.c_int,
         ctypes.c_float,
+        ctypes.c_int,
     ]
     lib.residual_rmsnorm_cuda.restype = None
 
     M, D, eps, reps = 4096, 768, 1e-5, 100
+    versions = (1, 2, 3, 4, 5)
     torch.manual_seed(42)
     X = torch.randn(M, D, device="cuda", dtype=torch.float16)
     R = torch.randn(M, D, device="cuda", dtype=torch.float16)
@@ -57,7 +59,7 @@ def run():
     U = torch.empty_like(X)
     Y = torch.empty_like(X)
 
-    def launch():
+    def launch(version):
         lib.residual_rmsnorm_cuda(
             ctypes.c_void_p(X.data_ptr()),
             ctypes.c_void_p(R.data_ptr()),
@@ -67,15 +69,21 @@ def run():
             M,
             D,
             ctypes.c_float(eps),
+            version,
         )
 
     U_ref = X + R
     Y_ref = F.rms_norm(U_ref, (D,), weight=W, eps=eps)
 
-    launch()
-    torch.cuda.synchronize()
-    print(f"U max abs err  {(U - U_ref).abs().max().item():.4f}")
-    print(f"Y max abs err  {(Y - Y_ref).abs().max().item():.4f}")
+    for version in versions:
+        U.zero_()
+        Y.zero_()
+        launch(version)
+        torch.cuda.synchronize()
+        print(
+            f"k{version}  U max abs err  {(U - U_ref).abs().max().item():.4f}  "
+            f"Y max abs err  {(Y - Y_ref).abs().max().item():.4f}"
+        )
 
     def bench(fn):
         for _ in range(10):
@@ -92,14 +100,18 @@ def run():
     def torch_fn():
         F.rms_norm(X + R, (D,), weight=W, eps=eps)
 
-    ms_kernel = bench(launch)
-    ms_torch = bench(torch_fn)
     # Useful FLOPs, not issued instructions:
     #   MD add (U=X+R) + 2MD (square+sum) + M (*1/D, +eps, sqrt)
     #   + MD (div by rms) + MD (mul by W)  =  5MD + 3M
     flops = M * (5 * D + 3)
+    ms_torch = bench(torch_fn)
     print(f"torch   {ms_torch:7.3f} ms  {flops / (ms_torch * 1e6):7.1f} GFLOP/s")
-    print(f"kernel  {ms_kernel:7.3f} ms  {flops / (ms_kernel * 1e6):7.1f} GFLOP/s  ({100.0 * ms_torch / ms_kernel:.1f}% of torch)")
+    for version in versions:
+        ms = bench(lambda v=version: launch(v))
+        print(
+            f"k{version}     {ms:7.3f} ms  {flops / (ms * 1e6):7.1f} GFLOP/s  "
+            f"({100.0 * ms_torch / ms:.1f}% of torch)"
+        )
 
 
 @app.local_entrypoint()
